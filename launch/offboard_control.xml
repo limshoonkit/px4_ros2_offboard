@@ -1,0 +1,40 @@
+<launch>
+	<!-- Flight Patterns
+	0: CIRCULAR
+	1: SPIRAL
+	2: CLOUD (frequency 7.0 for clear pattern)
+	3: SINE (speed 0.3, frequency 3.0 for displacement of 1.26)
+	4: N-GRAM (hepta-gram, vertices 7)
+	-->
+	<arg name="flight_pattern" default="0"/>
+	<arg name="max_iter" default="2"/>
+	<!-- Flight Parameters -->
+	<arg name="dt" default="0.05"/>
+	<arg name="radius" default="0.80"/>
+	<arg name="height" default="1.00"/>
+	<arg name="speed" default="0.30"/>
+	<arg name="min_speed" default="0.05"/>
+	<arg name="offset_x" default="0.00"/>
+	<arg name="offset_y" default="0.00"/>
+	<arg name="offset_z" default="0.50"/>
+	<arg name="frequency" default="7.00"/>
+	<arg name="ngram_vertices" default="7"/>
+	<arg name="ngram_step" default="2"/>
+
+    <node pkg="px4_ros2_offboard" exec="offboard_control_node" name="offboard_control_node" output="screen">
+    	<param name="flight_pattern" value="$(var flight_pattern)" />
+		<param name="max_iter" value="$(var max_iter)" />
+		<param name="height" value="$(var height)" />
+		<param name="dt" value="$(var dt)" />
+		<param name="radius" value="$(var radius)" />
+		<param name="speed" value="$(var speed)" />
+		<param name="min_speed" value="$(var min_speed)" />
+		<param name="offset_x" value="$(var offset_x)" />
+		<param name="offset_y" value="$(var offset_y)" />
+		<param name="offset_z" value="$(var offset_z)" />
+		<param name="frequency" value="$(var frequency)" />
+		<param name="ngram_vertices" value="$(var ngram_vertices)" />
+		<param name="ngram_step" value="$(var ngram_step)" />
+	</node>  
+
+</launch>
