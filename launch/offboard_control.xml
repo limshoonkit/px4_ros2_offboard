@@ -10,8 +10,8 @@
 	<arg name="max_iter" default="2"/>
 	<!-- Flight Parameters -->
 	<arg name="dt" default="0.05"/>
-	<arg name="radius" default="0.80"/>
-	<arg name="height" default="1.00"/>
+	<arg name="radius" default="1.00"/>
+	<arg name="height" default="1.50"/>
 	<arg name="speed" default="0.30"/>
 	<arg name="min_speed" default="0.05"/>
 	<arg name="offset_x" default="0.00"/>

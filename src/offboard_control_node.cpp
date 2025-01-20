@@ -1,9 +1,8 @@
-#include <px4_msgs/msg/px4io_status.hpp>
-#include <px4_msgs/msg/vehicle_status.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/srv/vehicle_command.hpp>
-#include <px4_msgs/msg/vehicle_odometry.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
+#include <px4_msgs/msg/vehicle_global_position.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/qos.hpp>
@@ -24,17 +23,7 @@ namespace uosm
 namespace px4
 {
 
-constexpr float PUBLISH_RATE(20.0);                 // pose publishing rate
-constexpr float THRESHOLD_ORIGIN(0.1);              // threshold for origin
-
-// Math utility
-template <typename T>
-inline static T calculate_vector_norm(const px4_msgs::msg::VehicleOdometry& odom)
-{
-	return static_cast<T>(std::sqrt(
-		std::pow(odom.position[0], 2) +
-		std::pow(odom.position[1], 2)));
-}
+constexpr float PUBLISH_RATE(20.0f);	   // publishing rate
 
 class OffboardControl : public rclcpp::Node
 {
@@ -43,14 +32,14 @@ public:
 	{
 		// Params setup
 		this->declare_parameter("flight_pattern", rclcpp::ParameterValue(0)); // Default to CIRCULAR
-    	rclcpp::Parameter flight_pattern_ = this->get_parameter("flight_pattern");
+		rclcpp::Parameter flight_pattern_ = this->get_parameter("flight_pattern");
 		const auto flight_pattern_int_ = flight_pattern_.as_int();
 		if (flight_pattern_int_ < 0 || flight_pattern_int_ > 4)
 		{
 			RCLCPP_ERROR(this->get_logger(), "Invalid flight pattern %ld!", flight_pattern_int_);
 			return;
 		}
-	
+
 		this->declare_parameter("max_iter", rclcpp::ParameterValue(2));
 		this->declare_parameter("dt", rclcpp::ParameterValue(0.05f));
 		this->declare_parameter("radius", rclcpp::ParameterValue(0.80f));
@@ -88,93 +77,75 @@ public:
 		RCLCPP_INFO(this->get_logger(), "Flight Pattern: %d, Flight Height: %.2f", pattern_, flight_params_.height);
 
 		// Publishers & Subscribers setup
-		rmw_qos_profile_t qos_profile = rmw_qos_profile_services_default;
-    	const auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 10), qos_profile);
-		offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(px4_namespace + "in/offboard_control_mode", qos);
-		trajectory_setpoint_publisher_ = this->create_publisher<TrajectorySetpoint>(px4_namespace + "in/trajectory_setpoint", qos);
+		const auto qos_profile = rclcpp::QoS(10)
+									 .reliability(rclcpp::ReliabilityPolicy::BestEffort)
+									 .durability(rclcpp::DurabilityPolicy::TransientLocal)
+									 .history(rclcpp::HistoryPolicy::KeepLast);
+
+		offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(px4_namespace + "in/offboard_control_mode", qos_profile);
+		trajectory_setpoint_publisher_ = this->create_publisher<TrajectorySetpoint>(px4_namespace + "in/trajectory_setpoint", qos_profile);
 		vehicle_command_client_ = this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace + "vehicle_command");
 
-		px4io_status_sub_ = this->create_subscription<px4_msgs::msg::Px4ioStatus>(px4_namespace + "in/px4io_status", qos,
-																				  [this](const px4_msgs::msg::Px4ioStatus::SharedPtr msg)
-																				  {
-																					  px4io_status_ = *msg;
-																				  });
-
-		vehicle_status_sub_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(px4_namespace + "in/vehicle_status", qos,
+		vehicle_status_sub_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(px4_namespace + "out/vehicle_status", qos_profile,
 																					  [this](const px4_msgs::msg::VehicleStatus::SharedPtr msg)
 																					  {
 																						  vehicle_status_ = *msg;
 																					  });
 
-		vehicle_odometry_sub_ = this->create_subscription<px4_msgs::msg::VehicleOdometry>(px4_namespace + "in/vehicle_odometry", qos,
-																						  [this](const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
+		vehicle_gp_sub_ = this->create_subscription<px4_msgs::msg::VehicleGlobalPosition>(px4_namespace + "out/vehicle_global_position", qos_profile,
+																						  [this](const px4_msgs::msg::VehicleGlobalPosition::SharedPtr msg)
 																						  {
-																						      vehicle_odometry_ = *msg;
+																							  vehicle_gp_ = *msg;
 																						  });
 
 		traj.position = {static_cast<float>(flight_params_.offset_x), static_cast<float>(flight_params_.offset_y), static_cast<float>(flight_params_.height)};
 		traj.yaw = 0.0f;
 
-		is_init = true;
+		is_init_ = true;
 	}
 
 	void arm();
 	void disarm();
-	void switch_to_auto_land_mode();
+
 	void switch_to_offboard_mode();
 	void publish_offboard_control_mode();
 
 	void publish_trajectory_setpoint();
-	void request_vehicle_command(uint16_t command, float param1 = 0.0f, float param2 = 0.0f);
-	
-	bool is_init = false;
+	void request_landing(float lat = 0.0f, float lon = 0.0f, float alt = 0.0f);
+	void request_vehicle_command(uint16_t command, float param1 = 0.0f, float param2 = 0.0f, float param3 = 0.0f);
+
+	bool is_init_ = false;
 	flight_pattern::PatternParameters flight_params_;
 	flight_pattern::PatternFactory::PatternType pattern_;
-	px4_msgs::msg::Px4ioStatus px4io_status_;
+
 	px4_msgs::msg::VehicleStatus vehicle_status_;
-	px4_msgs::msg::VehicleOdometry vehicle_odometry_;
+	px4_msgs::msg::VehicleGlobalPosition vehicle_gp_;
 
 	px4_msgs::msg::TrajectorySetpoint traj;
 
 private:
-
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
 	rclcpp::Publisher<TrajectorySetpoint>::SharedPtr trajectory_setpoint_publisher_;
 	rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedPtr vehicle_command_client_;
 
-	rclcpp::Subscription<Px4ioStatus>::SharedPtr px4io_status_sub_;
 	rclcpp::Subscription<VehicleStatus>::SharedPtr vehicle_status_sub_;
-	rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_sub_;
+	rclcpp::Subscription<VehicleGlobalPosition>::SharedPtr vehicle_gp_sub_;
 
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
 
 	uint8_t service_result_;
-	bool service_done_;
 };
 
 /**
- *  Assume following Flight Modes are set https://docs.px4.io/main/en/flight_modes_mc/
- *  1: Manual
- *  2: Position
- *  3: Offboard
- *  4: Auto Land
- *  5: Altitude
- *  6: Stabilized
- */
-/**
  * @brief Send a command to switch to offboard mode
+ * https://github.com/PX4/PX4-Autopilot/blob/main/src/modules/commander/Commander.cpp#L367
+ * PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6
  */
-void OffboardControl::switch_to_auto_land_mode(){
-	RCLCPP_INFO(this->get_logger(), "requesting switch to Auto Land mode");
-	request_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 4);
-}
-
-/**
- * @brief Send a command to switch to offboard mode
- */
-void OffboardControl::switch_to_offboard_mode(){
+void OffboardControl::switch_to_offboard_mode()
+{
 	RCLCPP_INFO(this->get_logger(), "requesting switch to Offboard mode");
-	request_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 3);
+	request_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
+	
 }
 
 /**
@@ -205,7 +176,7 @@ void OffboardControl::publish_offboard_control_mode()
 	msg.position = true;
 	msg.velocity = false;
 	msg.acceleration = false;
-	msg.attitude = false;
+	msg.attitude = true;
 	msg.body_rate = false;
 	msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 	offboard_control_mode_publisher_->publish(msg);
@@ -216,8 +187,38 @@ void OffboardControl::publish_offboard_control_mode()
  */
 void OffboardControl::publish_trajectory_setpoint()
 {
+	traj.position[2] *= -1; // invert (NED)
 	traj.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 	trajectory_setpoint_publisher_->publish(traj);
+	// RCLCPP_INFO(this->get_logger(), "Setting Trajectory (x = %.2f m, y = %.2f m, z = %.2f m, yaw = %.2f rad)", traj.position[0], traj.position[1], traj.position[2], traj.yaw);
+}
+
+void OffboardControl::request_landing(float lat, float lon, float alt)
+{
+	// https://mavlink.io/en/messages/common.html#MAV_CMD_NAV_LAND
+	auto request = std::make_shared<px4_msgs::srv::VehicleCommand::Request>();
+
+	VehicleCommand msg{};
+	msg.command = VehicleCommand::VEHICLE_CMD_NAV_LAND;
+	msg.param1 = 0.0f; // Abort Alt
+	msg.param2 = 0.0f; // Land Mode
+	// https://docs.px4.io/main/en/advanced_config/parameter_reference.html#MPC_LAND_SPEED
+	msg.param3 = NAN;	   // empty
+	msg.param4 = traj.yaw; // Yaw (rad)
+	msg.param5 = lat;	   // lat
+	msg.param6 = lon;	   // lon
+	msg.param7 = alt;	   // alt (m)
+	msg.target_system = 1;
+	msg.target_component = 1;
+	msg.source_system = 1;
+	msg.source_component = 1;
+	msg.from_external = true;
+	msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+	request->request = msg;
+
+	auto result = vehicle_command_client_->async_send_request(request, std::bind(&OffboardControl::response_callback, this,
+																				 std::placeholders::_1));
+	RCLCPP_INFO(this->get_logger(), "Land command send");
 }
 
 /**
@@ -226,13 +227,14 @@ void OffboardControl::publish_trajectory_setpoint()
  * @param param1    Command parameter 1
  * @param param2    Command parameter 2
  */
-void OffboardControl::request_vehicle_command(uint16_t command, float param1, float param2)
+void OffboardControl::request_vehicle_command(uint16_t command, float param1, float param2, float param3)
 {
 	auto request = std::make_shared<px4_msgs::srv::VehicleCommand::Request>();
 
 	VehicleCommand msg{};
 	msg.param1 = param1;
 	msg.param2 = param2;
+	msg.param3 = param3;
 	msg.command = command;
 	msg.target_system = 1;
 	msg.target_component = 1;
@@ -242,9 +244,8 @@ void OffboardControl::request_vehicle_command(uint16_t command, float param1, fl
 	msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 	request->request = msg;
 
-	service_done_ = false;
 	auto result = vehicle_command_client_->async_send_request(request, std::bind(&OffboardControl::response_callback, this,
-                           std::placeholders::_1));
+																				 std::placeholders::_1));
 	RCLCPP_INFO(this->get_logger(), "Command send");
 }
 
@@ -283,7 +284,6 @@ void OffboardControl::response_callback(
 			RCLCPP_WARN(this->get_logger(), "command reply unknown");
 			break;
 		}
-		service_done_ = true;
 	}
 	else
 	{
@@ -298,36 +298,46 @@ int main(int argc, char *argv[])
 {
 	setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 	rclcpp::init(argc, argv);
-	int fcu_timeout_count = 0;
-	bool isCompleted = false;
-    bool isReady = false;
-    int wait_period_sec = 2;
+	constexpr int wait_period_sec_ = 2;
+	constexpr int hover_period_sec_ = 20;
+	int preflight_check_timeout_count_ = 0;
+
+	enum STATE
+	{
+		DISARMED = 0,
+		OFFBOARD_ARMED,
+		HOVERING,
+		FLYING,
+		LANDING
+	} state_;
+
+	state_ = STATE::DISARMED;
+	bool is_done_ = false;
 
 	auto node = std::make_shared<uosm::px4::OffboardControl>("/fmu/");
-	if (node->is_init)
+	if (node->is_init_)
 	{
 		rclcpp::Rate rate(uosm::px4::PUBLISH_RATE);
-		RCLCPP_INFO(node->get_logger(), "Waiting FCU connection");
-		// Wait for FCU connection
-		while (rclcpp::ok() && !node->px4io_status_.status_fmu_ok)
+		RCLCPP_INFO(node->get_logger(), "Waiting Pre-flight Check");
+
+		// Check vehicle pre-flight status
+		while (rclcpp::ok() && !node->vehicle_status_.pre_flight_checks_pass)
 		{
 			rclcpp::spin_some(node);
 			rate.sleep();
-			fcu_timeout_count++;
-			if (fcu_timeout_count > 100)
+			preflight_check_timeout_count_++;
+			if (preflight_check_timeout_count_ > 100)
 			{
-				RCLCPP_ERROR(node->get_logger(), "No FCU connection!");
+				RCLCPP_ERROR(node->get_logger(), "Pre-flight Check Failed!");
 				return 1;
 			}
 		}
 
-		// Send a few setpoints before starting
-		for (int i = 100; rclcpp::ok() && i > 0; --i)
-		{
-			node->publish_trajectory_setpoint();
-			rclcpp::spin_some(node);
-			rate.sleep();
-		}
+		const float home_lat = node->vehicle_gp_.lat;
+		const float home_lon = node->vehicle_gp_.lon;
+		const float home_alt = node->vehicle_gp_.alt;
+
+		RCLCPP_ERROR(node->get_logger(), "Pre-flight Check OK, home position: (lat = %.6f, lon = %.6f, alt = %.2f m)", home_lat, home_lon, home_alt);
 		auto pattern = uosm::px4::flight_pattern::PatternFactory::createPattern(node->pattern_, node->flight_params_);
 		auto last_request = node->now();
 
@@ -335,74 +345,79 @@ int main(int argc, char *argv[])
 		{
 			auto nav_state = node->vehicle_status_.nav_state;
 			auto arming_state = node->vehicle_status_.arming_state;
-			if (arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_DISARMED && isCompleted)
-			{
-				RCLCPP_INFO(node->get_logger(), "Flight mission completed, Exiting!");
-				rclcpp::shutdown();
-				return 0;
-			}
+			node->publish_offboard_control_mode();
 			node->publish_trajectory_setpoint();
 			rclcpp::spin_some(node);
 			rate.sleep();
 
-			// Switch to offboard mode
-			if (nav_state != px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD &&
-				nav_state != px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND &&
-				(node->now() - last_request > rclcpp::Duration::from_seconds(wait_period_sec)))
+			switch (state_)
 			{
-				node->switch_to_offboard_mode();
-				last_request = node->now();
-			}
-			else
-			{
-				// Arm the vehicle
-				if (arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_DISARMED &&
-					(node->now() - last_request > rclcpp::Duration::from_seconds(wait_period_sec)) &&
-					!isCompleted)
+			case STATE::DISARMED:
+				// RCLCPP_INFO(node->get_logger(), "STATE::DISARMED");
+				if (is_done_)
 				{
+					RCLCPP_INFO(node->get_logger(), "Flight mission completed, Exiting!");
+					rclcpp::shutdown();
+					return 0;
+				}
+				state_ = STATE::OFFBOARD_ARMED;
+				break;
+			case STATE::OFFBOARD_ARMED:
+				// RCLCPP_INFO(node->get_logger(), "STATE::OFFBOARD_ARMED");
+				if (is_done_)
+				{
+					state_ = STATE::DISARMED;
+				}
+				if ((node->now() - last_request).seconds() > wait_period_sec_)
+				{
+					node->switch_to_offboard_mode();
 					node->arm();
 					last_request = node->now();
 				}
 
-				// Start the flight pattern
 				if (nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD &&
-					arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
-					!isCompleted)
+					arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED)
 				{
-					if (!isReady)
+					state_ = STATE::HOVERING;
+				}
+				break;
+			case STATE::HOVERING:
+				// RCLCPP_INFO(node->get_logger(), "STATE::HOVERING");
+				node->traj.yaw = M_PI_2; // NED convertion, Adjust with π/2 radians, Assuming vehicle starting at 0 radians in ENU frame
+				pattern->hover(node->traj);
+				if ((node->now() - last_request).seconds() > hover_period_sec_)
+				{
+					if (is_done_)
 					{
-						pattern->hover(node->traj);
-						last_request = node->now();
-						isReady = true;
+						state_ = STATE::LANDING;
 					}
-
-					// HOVER for wait_period_sec, then run the flight pattern
-					if (isReady && (node->now() - last_request) > rclcpp::Duration::from_seconds(wait_period_sec))
+					else
 					{
-						pattern->run(node->traj);
-						RCLCPP_INFO(node->get_logger(), "Setting Trajectory (x = %.2f m, y = %.2f m, z = %.2f m, yaw = %.2f rad)", node->traj.position[0], node->traj.position[1], node->traj.position[2], node->traj.yaw);
-						isCompleted = pattern->is_done();
+						state_ = STATE::FLYING;
 					}
 				}
-
-				// Return to original position, then land
-				if (nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD &&
-					arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
-					isCompleted)
+				break;
+			case STATE::FLYING:
+				// RCLCPP_INFO(node->get_logger(), "STATE::FLYING");
+				pattern->run(node->traj);
+				if (pattern->is_done())
 				{
-					auto pos_z = node->vehicle_odometry_.position[2];
-					auto norm_xy = uosm::px4::calculate_vector_norm<float>(node->vehicle_odometry_);
-					if (pos_z >= uosm::px4::THRESHOLD_ORIGIN && norm_xy >= uosm::px4::THRESHOLD_ORIGIN)
-					{
-						pattern->hover(node->traj);
-						RCLCPP_WARN(node->get_logger(), "Returning to hover at origin! x = %.2f m, y = %.2f m, z = %.2f m", node->vehicle_odometry_.position[0], node->vehicle_odometry_.position[1], pos_z);
-					}
-
-					if(nav_state != px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND)
-					{
-						node->switch_to_auto_land_mode();
-					}
+					is_done_ = true;
+					last_request = node->now();
+					state_ = STATE::HOVERING;
 				}
+				break;
+			case STATE::LANDING:
+				// RCLCPP_INFO(node->get_logger(), "STATE::LANDING");
+				if (nav_state != px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND)
+				{
+					node->request_landing(home_lat, home_lon, home_alt);
+					state_ = STATE::DISARMED;
+				}
+				break;
+			default:
+				RCLCPP_INFO(node->get_logger(), "STATE::UNKNOWN");
+				break;
 			}
 		}
 	}

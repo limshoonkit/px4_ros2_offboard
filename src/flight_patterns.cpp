@@ -10,7 +10,7 @@ namespace flight_pattern
 
 void Pattern::hover(px4_msgs::msg::TrajectorySetpoint &setpoint) const
 {
-    setpoint.position = {static_cast<float>(params_.offset_x), static_cast<float>(params_.offset_y), static_cast<float>(params_.height)};
+    setpoint.position = {0.0f, 0.0f, static_cast<float>(params_.height)};
     setpoint.yaw = 0.0f;
 }
 
