@@ -145,7 +145,7 @@ void OffboardControl::switch_to_offboard_mode()
 {
 	RCLCPP_INFO(this->get_logger(), "requesting switch to Offboard mode");
 	request_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
-	
+
 }
 
 /**
@@ -383,7 +383,6 @@ int main(int argc, char *argv[])
 				break;
 			case STATE::HOVERING:
 				// RCLCPP_INFO(node->get_logger(), "STATE::HOVERING");
-				node->traj.yaw = M_PI_2; // NED convertion, Adjust with π/2 radians, Assuming vehicle starting at 0 radians in ENU frame
 				pattern->hover(node->traj);
 				if ((node->now() - last_request).seconds() > hover_period_sec_)
 				{

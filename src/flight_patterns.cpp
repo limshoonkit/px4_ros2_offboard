@@ -11,7 +11,8 @@ namespace flight_pattern
 void Pattern::hover(px4_msgs::msg::TrajectorySetpoint &setpoint) const
 {
     setpoint.position = {0.0f, 0.0f, static_cast<float>(params_.height)};
-    setpoint.yaw = 0.0f;
+    setpoint.yaw = M_PI_2; // NED convertion, Adjust with π/2 radians, Assuming vehicle starting at 0 radians in ENU frame
+    // setpoint.yaw = 0.0f;
 }
 
 void Pattern::increase_iteration()
